@@ -4,11 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/listing_draft.dart';
+import '../repositories/listing_draft_repository.dart';
 import '../services/gemini_service.dart';
 import '../services/gemini_vision_service.dart';
+import 'my_drafts_page.dart';
 
 class SellItemPage extends StatefulWidget {
-  const SellItemPage({super.key});
+  final ListingDraftRepository draftRepository;
+
+  const SellItemPage({super.key, required this.draftRepository});
 
   @override
   State<SellItemPage> createState() => _SellItemPageState();
@@ -44,6 +48,7 @@ class _SellItemPageState extends State<SellItemPage> {
   ListingDraft? _lastSavedDraft;
   bool _isAnalyzing = false;
   bool _isTestingText = false;
+  bool _isSaving = false;
   bool _safetyMode = _testSafety;
   String? _errorMessage;
 
@@ -151,11 +156,16 @@ class _SellItemPageState extends State<SellItemPage> {
     }
   }
 
-  void _confirmDraft() {
+  Future<void> _confirmDraft() async {
     if (_titleController.text.trim().isEmpty ||
         _categoryController.text.trim().isEmpty ||
         _descriptionController.text.trim().isEmpty) {
       setState(() => _errorMessage = 'กรุณากรอกข้อมูลให้ครบทั้ง 3 ช่อง');
+      return;
+    }
+    final image = _selectedImage;
+    if (image == null) {
+      setState(() => _errorMessage = 'กรุณาเลือกรูปภาพสินค้า');
       return;
     }
 
@@ -166,15 +176,28 @@ class _SellItemPageState extends State<SellItemPage> {
     );
 
     setState(() {
-      _lastSavedDraft = finalDraft;
-      _selectedImage = null;
-      _aiDraft = null;
+      _isSaving = true;
       _errorMessage = null;
-      _clearControllers();
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('บันทึกร่างประกาศเรียบร้อยแล้ว')),
-    );
+
+    try {
+      await widget.draftRepository.saveDraft(finalDraft, image.path);
+      if (!mounted) return;
+      setState(() {
+        _lastSavedDraft = finalDraft;
+        _selectedImage = null;
+        _aiDraft = null;
+        _clearControllers();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('บันทึกร่างประกาศเรียบร้อยแล้ว')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'บันทึกร่างไม่สำเร็จ: $error');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   void _clearControllers() {
@@ -195,7 +218,23 @@ class _SellItemPageState extends State<SellItemPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('ลงประกาศขายสินค้า')),
+      appBar: AppBar(
+        title: const Text('ลงประกาศขายสินค้า'),
+        actions: [
+          IconButton(
+            tooltip: 'ร่างประกาศของฉัน',
+            icon: const Icon(Icons.history),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => MyDraftsPage(
+                  repository: widget.draftRepository,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -355,9 +394,17 @@ class _SellItemPageState extends State<SellItemPage> {
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: _confirmDraft,
-                icon: const Icon(Icons.check_circle_outline),
-                label: const Text('ยืนยันร่างประกาศ'),
+                onPressed: _isSaving ? null : _confirmDraft,
+                icon: _isSaving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.check_circle_outline),
+                label: Text(
+                  _isSaving ? 'กำลังบันทึก...' : 'ยืนยันร่างประกาศ',
+                ),
               ),
             ],
             if (_lastSavedDraft != null) ...[
